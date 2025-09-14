@@ -38,12 +38,31 @@ def S_box(block: int, table: list) -> int:
 
     return output
 
-
 def left_circular_shift(block: int, shifts: int) -> int:
     shifted = ((block << shifts) & 0xFFFFFFF) | (block >> (28 - shifts))
     return shifted
 
-def mangler_function(left_half: int, right_half: int, round_key: int) -> list[int, int]:
+def key_schedule(key: bytes) -> list:
+    subkey = P_box(int.from_bytes(key, byteorder='big'), tables.PC_1, 64)
+
+    left_key_half = (subkey >> 28) & 0xFFFFFFF
+    right_key_half = subkey & 0xFFFFFFF
+
+    round_keys = []
+
+    for round in range(16):
+        left_key_half = left_circular_shift(left_key_half, tables.shifts[round])
+        right_key_half = left_circular_shift(right_key_half, tables.shifts[round])
+
+        round_key = (left_key_half << 28) | right_key_half
+
+        round_key = P_box(round_key, tables.PC_2, 56)
+
+        round_keys.append(round_key)
+
+    return round_keys
+
+def mangler_function(left_half: int, right_half: int, round_key: int) -> list:
     expanded_right_half = E_box(right_half, tables.E, 32)
 
     xor_right_half = expanded_right_half ^ round_key
@@ -56,27 +75,16 @@ def mangler_function(left_half: int, right_half: int, round_key: int) -> list[in
 
     return [right_half, new_right_half]
 
-def key_generation(left_half: int, right_half: int, round: int) -> list[int, int, int]:
-    left_half = left_circular_shift(left_half, tables.shifts[round])
-    right_half = left_circular_shift(right_half, tables.shifts[round])
-
-    round_key = (left_half << 28) | right_half
-
-    round_key = P_box(round_key, tables.PC_2, 56)
-
-    return [left_half, right_half, round_key]
-
-def round_function(left_half: int, right_half: int, left_key_half: int, right_key_half: int, round: int) -> list[int, int, int, int]:
-    left_key_half, right_key_half, round_key = key_generation(left_key_half, right_key_half, round)
-
+def round_function(left_half: int, right_half: int, round_key: int) -> list:
     left_half, right_half = mangler_function(left_half, right_half, round_key)
 
-    return [left_half, right_half, left_key_half, right_key_half]
+    return [left_half, right_half]
 
 def DES_encrypt(plaintext: bytes, key: bytes) -> bytes:
     padding_length = 8 - (len(plaintext) % 8)
     plaintext = plaintext + bytes([padding_length] * padding_length)
 
+    round_keys = key_schedule(key)
     ciphertext = bytearray()
 
     for i in range(0, len(plaintext), 8):
@@ -85,16 +93,11 @@ def DES_encrypt(plaintext: bytes, key: bytes) -> bytes:
 
         block = P_box(block, tables.IP, 64)
 
-        subkeys = P_box(int.from_bytes(key, byteorder='big'), tables.PC_1, 64)
-
         left_half = (block >> 32) & 0xFFFFFFFF
         right_half = block & 0xFFFFFFFF
 
-        left_key_half = (subkeys >> 28) & 0xFFFFFFF
-        right_key_half = subkeys & 0xFFFFFFF
-
-        for round in range(0, 16, 1):
-            left_half, right_half, left_key_half, right_key_half = round_function(left_half, right_half, left_key_half, right_key_half, round)
+        for round in range(16):
+            left_half, right_half = round_function(left_half, right_half, round_keys[round])
 
         block = (right_half << 32) | left_half
 
@@ -103,3 +106,32 @@ def DES_encrypt(plaintext: bytes, key: bytes) -> bytes:
         ciphertext = ciphertext + block.to_bytes(8, byteorder='big')
 
     return bytes(ciphertext)
+
+def DES_decrypt(ciphertext: bytes, key: bytes) -> bytes:
+    plaintext = bytearray()
+
+    round_keys = key_schedule(key)
+    
+    for i in range(0, len(ciphertext), 8):
+        block = ciphertext[i: i + 8]
+
+        block = int.from_bytes(block, byteorder='big')
+
+        block = P_box(block, tables.IP, 64)
+
+        left_half = (block >> 32) & 0xFFFFFFFF
+        right_half = block & 0xFFFFFFFF
+
+        for round in range(15, -1, -1):
+            left_half, right_half = round_function(left_half, right_half, round_keys[round])
+
+        block = (right_half << 32) | left_half
+
+        block = P_box(block, tables.FP, 64)
+
+        plaintext = plaintext + block.to_bytes(8, byteorder='big')
+
+    padding_length = plaintext[-1]
+    plaintext = plaintext[0: len(plaintext) - padding_length]
+
+    return bytes(plaintext)

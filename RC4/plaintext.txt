@@ -1,1 +1,1 @@
-HELLO WORLD
+The quick brown fox jumps over the lazy dog.

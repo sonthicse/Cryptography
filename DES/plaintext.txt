@@ -1,1 +1,2 @@
-HELLO WORLD
+bản mã cho mã hóa
+xin chào
